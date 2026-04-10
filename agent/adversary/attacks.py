@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from datetime import date
 from typing import Literal
 
 import structlog
@@ -134,23 +135,55 @@ def attack_float_money_in_api_response(c: FundingClient) -> AttackResult:
     """INV-11: All money fields are integer cents — never floats or ambiguous strings."""
     raise NotImplementedError
 
+def attack_float_payoff(c: FundingClient) -> AttackResult:
+    """
+    INV-11: All money fields are integer cents — never floats, never strings with >2dp.
+
+    Observes GET payoff: if ``total_cents`` is a JSON float, the API violates INV-11.
+    """
+    contract_id = os.environ["MOVEDOCS_CONTRACT_ID"]
+    payoff_date = date.fromisoformat(os.environ["MOVEDOCS_PAYOFF_DATE"])
+    r = c.get_payoff(contract_id, payoff_date)
+    body = r.json()
+    evidence: dict = {"status_code": r.status_code, "body": body}
+
+    if r.status_code != 200:
+        return AttackResult(
+            rule="INV-11",
+            status="INDETERMINATE",
+            evidence=evidence,
+            reasoning="Payoff request did not succeed; cannot evaluate money field types.",
+        )
+
+    total = body.get("total_cents")
+    if isinstance(total, float):
+        return AttackResult(
+            rule="INV-11",
+            status="BREACHED",
+            evidence=evidence,
+            reasoning="API returned total_cents as float; integer cents required per INV-11.",
+        )
+    if type(total) is int:
+        return AttackResult(
+            rule="INV-11",
+            status="HELD",
+            evidence=evidence,
+            reasoning="total_cents is integer-typed in payoff response.",
+        )
+    return AttackResult(
+        rule="INV-11",
+        status="INDETERMINATE",
+        evidence=evidence,
+        reasoning="total_cents missing or unexpected type for INV-11 evaluation.",
+    )
+
 def attack_interest_day_count_basis(c: FundingClient) -> AttackResult:
     """INV-12: Interest uses exact calendar day count from disbursement_date to payoff_date."""
     raise NotImplementedError
 
 AttackFn = Callable[..., AttackResult]
 
-ATTACKS: list[AttackFn] = [
-    attack_duplicate_funding,  # INV-01: duplicate active funding
-    attack_closed_case_funding,  # INV-02: approval on terminal case
-    attack_disburse_without_attorney_ack,  # INV-03: missing or late acknowledgment
-    attack_payoff_component_mismatch,  # INV-04: payoff arithmetic / accrual basis
-    attack_exceeds_case_max_exposure,  # INV-05: over-approval vs case max
-    attack_usury_rate_cap,  # INV-06: jurisdiction usury
-    attack_waterfall_order_violation,  # INV-07: waterfall ordering
-    attack_lien_balance_exceeds_billed,  # INV-08: lien overbalance
-    attack_negative_plaintiff_remainder,  # INV-09: negative remainder
-    attack_cancelled_application_capacity_leak,  # INV-10: capacity not released
-    attack_float_money_in_api_response,  # INV-11: float or string money
-    attack_interest_day_count_basis,  # INV-12: day-count errors
-]
+ATTACKS: dict[str, Callable[[FundingClient], AttackResult]] = {
+    "duplicate_funding": attack_duplicate_funding,
+    "float_payoff": attack_float_payoff,
+}

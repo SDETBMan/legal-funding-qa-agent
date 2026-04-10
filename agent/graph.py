@@ -7,7 +7,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from agent.adversary.attacks import AttackResult, attack_duplicate_funding
+from agent.adversary.attacks import ATTACKS, AttackResult
 from agent.clients.funding_client import FundingClient
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -18,11 +18,9 @@ class RunAttackState(TypedDict, total=False):
     attack_name: str
     result: dict[str, Any]
 
-_ATTACK_REGISTRY: dict[str, Callable[[FundingClient], AttackResult]] = {
-    "duplicate_funding": attack_duplicate_funding,
-}
+_ATTACK_REGISTRY: dict[str, Callable[[FundingClient], AttackResult]] = ATTACKS
 
-KNOWN_ATTACKS: frozenset[str] = frozenset(_ATTACK_REGISTRY.keys())
+KNOWN_ATTACKS: frozenset[str] = frozenset(ATTACKS.keys())
 
 def _write_attacks_json(attack_name: str, result: AttackResult) -> None:
     artifacts_dir = _ROOT / "artifacts"
