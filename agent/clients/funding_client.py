@@ -88,6 +88,32 @@ class FundingClient:
         self._log_response(endpoint=endpoint, response=response)
         return response
 
+    def create_case(
+        self,
+        plaintiff_name: str,
+        attorney_name: str,
+        estimated_settlement_cents: int,
+        jurisdiction: str = "IL",
+    ) -> httpx.Response:
+        endpoint = "POST /cases"
+        path = "/cases"
+        json_body = {
+            "plaintiff_name": plaintiff_name,
+            "attorney_name": attorney_name,
+            "estimated_settlement_cents": estimated_settlement_cents,
+            "jurisdiction": jurisdiction,
+        }
+        self._log_call(
+            endpoint=endpoint,
+            method="POST",
+            path=path,
+            params=None,
+            json_body=json_body,
+        )
+        response = self._client.post(path, json=json_body)
+        self._log_response(endpoint=endpoint, response=response)
+        return response
+
     def apply_for_funding(
         self,
         case_id: str,

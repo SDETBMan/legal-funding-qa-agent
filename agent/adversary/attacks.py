@@ -14,6 +14,9 @@ from agent.clients.lien_client import LienClient
 
 log = structlog.get_logger(__name__)
 
+WATERFALL_SETTLEMENT_CENTS = 2_000_000
+WATERFALL_ESTIMATED_CENTS = 10_000_000
+
 class AttackResult(BaseModel):
     """
     Observation payload for the Judge; attacks collect evidence per §6.5.
@@ -148,6 +151,141 @@ def attack_usury_rate_cap(c: FundingClient) -> AttackResult:
 def attack_waterfall_order_violation(c: DisbursementClient) -> AttackResult:
     """INV-07: Settlement waterfall order: Medicare/Medicaid → medical by rank → funding → fees → remainder."""
     raise NotImplementedError
+
+def attack_waterfall_priority(c: FundingClient) -> AttackResult:
+    """
+    INV-07: Settlement waterfall order: Medicare/Medicaid super-priority → medical liens by priority_rank → funding payoff → attorney fees → plaintiff remainder.
+
+    Invariant rule: "Settlement waterfall order: Medicare/Medicaid super-priority → medical liens by priority_rank → funding payoff → attorney fees → plaintiff remainder"
+    Blast radius: "Legal liability to lienholders"
+    """
+    case_id: str | None = None
+    try:
+        cr = c.create_case(
+            plaintiff_name="Waterfall Attack Plaintiff",
+            attorney_name="Waterfall Attack Attorney",
+            estimated_settlement_cents=WATERFALL_ESTIMATED_CENTS,
+            jurisdiction="IL",
+        )
+        case_body = cr.json()
+        if cr.status_code != 201:
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence={"status_code": cr.status_code, "body": case_body},
+                reasoning="POST /cases did not return 201; cannot build waterfall scenario.",
+            )
+        case_id = str(case_body["case_id"])
+
+        la = c.create_lien(
+            case_id=case_id,
+            lien_type="MEDICAL",
+            priority_rank=1,
+            balance_cents=500_000,
+            original_billed_cents=500_000,
+            lienholder_name="City Hospital",
+        )
+        if la.status_code not in (200, 201):
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence={"status_code": la.status_code, "body": la.json()},
+                reasoning="Failed to create MEDICAL lien A for INV-07 scenario.",
+            )
+
+        lb = c.create_lien(
+            case_id=case_id,
+            lien_type="MEDICARE",
+            priority_rank=2,
+            balance_cents=300_000,
+            original_billed_cents=300_000,
+            lienholder_name="CMS",
+        )
+        if lb.status_code not in (200, 201):
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence={"status_code": lb.status_code, "body": lb.json()},
+                reasoning="Failed to create MEDICARE lien B for INV-07 scenario.",
+            )
+
+        sr = c.record_settlement(case_id, WATERFALL_SETTLEMENT_CENTS)
+        settle_body = sr.json()
+        if sr.status_code not in (200, 201):
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence={"status_code": sr.status_code, "body": settle_body},
+                reasoning="POST /cases/{case_id}/settle did not succeed; cannot read waterfall.",
+            )
+
+        waterfall = settle_body.get("waterfall")
+        if not isinstance(waterfall, list) or len(waterfall) < 2:
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence=settle_body if isinstance(settle_body, dict) else {"body": settle_body},
+                reasoning="Settlement response missing waterfall array with at least two lines.",
+            )
+
+        w0 = waterfall[0]
+        w1 = waterfall[1]
+        if not isinstance(w0, dict) or not isinstance(w1, dict):
+            return AttackResult(
+                rule="INV-07",
+                status="INDETERMINATE",
+                evidence=settle_body,
+                reasoning="Waterfall entries are not objects with lien_type.",
+            )
+
+        t0 = w0.get("lien_type")
+        t1 = w1.get("lien_type")
+
+        if t0 == "MEDICAL" and t1 == "MEDICARE":
+            return AttackResult(
+                rule="INV-07",
+                status="BREACHED",
+                evidence={
+                    "case_id": case_id,
+                    "waterfall_first_two": [w0, w1],
+                    "settlement_body": settle_body,
+                },
+                reasoning=(
+                    "Medicare was paid second despite super-priority: waterfall[0] is MEDICAL "
+                    "and waterfall[1] is MEDICARE."
+                ),
+            )
+        if t0 == "MEDICARE":
+            return AttackResult(
+                rule="INV-07",
+                status="HELD",
+                evidence={
+                    "case_id": case_id,
+                    "waterfall_first_two": [w0, w1],
+                    "settlement_body": settle_body,
+                },
+                reasoning="Medicare super-priority correctly enforced (Medicare before medical in waterfall).",
+            )
+        return AttackResult(
+            rule="INV-07",
+            status="INDETERMINATE",
+            evidence={
+                "case_id": case_id,
+                "waterfall_first_two": [w0, w1],
+                "settlement_body": settle_body,
+            },
+            reasoning=f"First two waterfall lien_types are {t0!r} then {t1!r}; expected MEDICAL+Medicare breach pattern or MEDICARE first for HELD.",
+        )
+    except Exception as exc:
+        return AttackResult(
+            rule="INV-07",
+            status="INDETERMINATE",
+            evidence={"exception": repr(exc), "case_id": case_id},
+            reasoning="INV-07 waterfall scenario failed before a verdict could be formed.",
+        )
+    finally:
+        if case_id is not None:
+            log.info("waterfall_attack_case", case_id=case_id, rule="INV-07")
 
 def attack_lien_balance_exceeds_billed(c: LienClient) -> AttackResult:
     """INV-08: Medical lien balance cannot exceed original_billed_amount."""
@@ -304,4 +442,5 @@ ATTACKS: dict[str, Callable[[FundingClient], AttackResult]] = {
     "disburse_without_attorney_ack": attack_disburse_without_attorney_ack,  # INV-03: disburse without ack
     "float_payoff": attack_float_payoff,
     "interest_from_application_date": attack_interest_from_application_date,  # INV-04: interest from application date
+    "waterfall_priority": attack_waterfall_priority,  # INV-07: Medicare super-priority in settlement waterfall
 }
