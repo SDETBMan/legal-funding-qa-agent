@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  mock-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  qa-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      mock-api:
+        condition: service_healthy
+    environment:
+      - MOVEDOCS_API_BASE=http://mock-api:8000
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ./artifacts:/app/artifacts
+    profiles:
+      - agent   # run with: docker-compose --profile agent up
