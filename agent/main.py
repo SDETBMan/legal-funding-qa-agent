@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parent.parent
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agent.main")
@@ -27,28 +25,33 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    if args.attack == "duplicate_funding":
-        from agent.graph import run_duplicate_funding_graph
-
-        final_state = run_duplicate_funding_graph()
-        payload = {
-            "attack": "duplicate_funding",
-            "result": final_state.get("result"),
-        }
-        artifacts_dir = _ROOT / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        out_path = artifacts_dir / "attacks.json"
-        out_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+    if args.attack is None:
+        parser.print_help()
         return
 
-    if args.attack is not None:
+    if "MOVEDOCS_API_BASE" not in os.environ:
+        print("error: MOVEDOCS_API_BASE is not set", file=sys.stderr)
+        raise SystemExit(1)
+
+    from agent.clients.funding_client import FundingClient
+    from agent.graph import KNOWN_ATTACKS, run_named_attack
+
+    if args.attack not in KNOWN_ATTACKS:
         print(f"Unknown attack: {args.attack!r}", file=sys.stderr)
         raise SystemExit(1)
 
-    parser.print_help()
+    client = FundingClient()
+    final_state = run_named_attack(client, args.attack)
+    result = final_state["result"]
+    rule = result["rule"]
+    status = result["status"]
+    reasoning = result["reasoning"]
+
+    print(f"{rule} | {args.attack} | {status} | {json.dumps(reasoning, ensure_ascii=False)}")
+
+    if status == "BREACHED":
+        raise SystemExit(1)
+    raise SystemExit(0)
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse CLI flags such as --attack duplicate_funding (§13.2)."""

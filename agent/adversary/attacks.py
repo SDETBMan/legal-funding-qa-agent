@@ -43,31 +43,20 @@ def attack_duplicate_funding(c: FundingClient) -> AttackResult:
         if app_2.status_code == 201:
             created_ids.append(body_2["application_id"])
             return AttackResult(
-                rule="INV-01",
-                status="BREACHED",
+                rule="INV-01", status="BREACHED",
                 evidence={"app_1": app_1.json(), "app_2": body_2},
                 reasoning="Platform accepted a second active funding on the same case.",
             )
         elif app_2.status_code in (409, 422):
-            return AttackResult(
-                rule="INV-01",
-                status="HELD",
-                evidence=body_2,
-                reasoning="Duplicate correctly rejected.",
-            )
+            return AttackResult(rule="INV-01", status="HELD",
+                                evidence=body_2, reasoning="Duplicate correctly rejected.")
         else:
-            return AttackResult(
-                rule="INV-01",
-                status="INDETERMINATE",
-                evidence=body_2,
-                reasoning="Unexpected status — Judge to evaluate.",
-            )
+            return AttackResult(rule="INV-01", status="INDETERMINATE",
+                                evidence=body_2, reasoning="Unexpected status — Judge to evaluate.")
     finally:
         for aid in created_ids:
-            try:
-                c.cancel(aid)
-            except Exception:
-                log.warning("cleanup_failed", application_id=aid)
+            try: c.cancel(aid)
+            except Exception: log.warning("cleanup_failed", application_id=aid)
 
 def attack_closed_case_funding(c: FundingClient) -> AttackResult:
     """
@@ -78,7 +67,7 @@ def attack_closed_case_funding(c: FundingClient) -> AttackResult:
         CLOSED_CASE_ID = os.environ["MOVEDOCS_CLOSED_CASE_ID"]
         app_1 = c.apply(case_id=CLOSED_CASE_ID, amount_cents=500_000)
         created_ids.append(app_1.json()["application_id"])
-        appr = c.approve(application_id=created_ids[0])
+        appr = c.approve_funding(application_id=created_ids[0])
         body_2 = appr.json()
 
         if appr.status_code in (200, 201):

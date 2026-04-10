@@ -1,38 +1,58 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from agent.adversary.attacks import attack_duplicate_funding
+from agent.adversary.attacks import AttackResult, attack_duplicate_funding
 from agent.clients.funding_client import FundingClient
 
-class DuplicateFundingState(TypedDict, total=False):
-    """State for the single-node INV-01 duplicate-funding attack graph."""
+_ROOT = Path(__file__).resolve().parent.parent
 
+class RunAttackState(TypedDict, total=False):
+    """LangGraph state: attack name in, serialized result out."""
+
+    attack_name: str
     result: dict[str, Any]
 
-def _duplicate_funding_node(state: DuplicateFundingState) -> DuplicateFundingState:
-    client = FundingClient()
-    result = attack_duplicate_funding(client)
-    return {"result": result.model_dump(mode="json")}
+_ATTACK_REGISTRY: dict[str, Callable[[FundingClient], AttackResult]] = {
+    "duplicate_funding": attack_duplicate_funding,
+}
 
-def build_duplicate_funding_graph():
-    """
-    Single-node LangGraph: runs ``attack_duplicate_funding`` once, then ends.
+KNOWN_ATTACKS: frozenset[str] = frozenset(_ATTACK_REGISTRY.keys())
 
-    Requires ``MOVEDOCS_API_BASE`` and ``MOVEDOCS_SEED_CASE_ID`` in the environment.
-    """
-    graph = StateGraph(DuplicateFundingState)
-    graph.add_node("duplicate_funding", _duplicate_funding_node)
-    graph.set_entry_point("duplicate_funding")
-    graph.add_edge("duplicate_funding", END)
+def _write_attacks_json(attack_name: str, result: AttackResult) -> None:
+    artifacts_dir = _ROOT / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"attack": attack_name, "result": result.model_dump(mode="json")}
+    (artifacts_dir / "attacks.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+def build_run_attack_graph(client: FundingClient):
+    """Single-node graph: ``run_attack`` dispatches by name and writes ``artifacts/attacks.json``."""
+
+    def run_attack_node(state: RunAttackState) -> RunAttackState:
+        name = state["attack_name"]
+        fn = _ATTACK_REGISTRY[name]
+        result = fn(client)
+        _write_attacks_json(name, result)
+        return {"attack_name": name, "result": result.model_dump(mode="json")}
+
+    graph = StateGraph(RunAttackState)
+    graph.add_node("run_attack", run_attack_node)
+    graph.set_entry_point("run_attack")
+    graph.add_edge("run_attack", END)
     return graph.compile()
 
-def run_duplicate_funding_graph() -> dict[str, Any]:
-    """Execute the duplicate-funding graph and return the terminal state (includes ``result``)."""
-    app = build_duplicate_funding_graph()
-    return app.invoke({})
+def run_named_attack(client: FundingClient, attack_name: str) -> dict[str, Any]:
+    """Compile and invoke the run_attack graph for ``attack_name``."""
+    app = build_run_attack_graph(client)
+    return app.invoke({"attack_name": attack_name})
 
 def build_qa_graph() -> Any:
     """
