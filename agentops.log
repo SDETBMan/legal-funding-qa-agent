@@ -1,0 +1,6 @@
+2026-04-10 14:50:38,363 - WARNING - start_session() is deprecated and will be removed in v4 in the future. Use agentops.start_trace() instead.
+2026-04-10 14:50:38,466 - INFO - Session Replay for session trace: https://app.agentops.ai/sessions?trace_id=d32987a2a3e82c839fd25687e14e26a5
+2026-04-10 14:50:39,004 - WARNING - ActionEvent() is deprecated and will be removed in v4 in the future. Automatically tracked in v4.
+2026-04-10 14:50:39,004 - WARNING - record() is deprecated and will be removed in v4 in the future. Automatically tracked in v4.
+2026-04-10 14:50:39,307 - WARNING - end_session() is deprecated and will be removed in v4 in the future. Use agentops.end_trace() instead.
+2026-04-10 14:50:40,323 - INFO - Session Replay for session.session trace: https://app.agentops.ai/sessions?trace_id=d32987a2a3e82c839fd25687e14e26a5

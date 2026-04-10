@@ -1,0 +1,2 @@
+# QA agent — AgentOps (install: pip install -r requirements.txt)
+agentops>=0.3.0
