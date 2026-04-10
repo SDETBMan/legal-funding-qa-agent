@@ -1,45 +1,49 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Any
 
-from agent.models.money import Cents
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
+
+from agent.models.lien import LienType
+from agent.models.money import validate_cents
+
+class WaterfallLine(BaseModel):
+    """One lien slice in an ordered settlement waterfall."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lien_id: str
+    lienholder_name: str
+    priority_rank: int
+    amount_paid_cents: int
+    lien_type: LienType
+
+    @field_validator("amount_paid_cents", mode="before")
+    @classmethod
+    def _amount_paid_cents(cls, v: Any, info: ValidationInfo) -> int:
+        return validate_cents(v, info.field_name or "amount_paid_cents")
 
 class SettlementDisbursement(BaseModel):
     """
-    INV-07, INV-09, INV-11: Full settlement allocation; buckets plus remainder must equal settlement.
+    INV-07, INV-09: Full settlement waterfall lines plus plaintiff remainder.
 
-    Bucket totals follow the canonical waterfall ordering in aggregate form.
+    ``waterfall`` must be sorted by ``priority_rank`` ascending.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    settlement_id: str
-    settlement_amount_cents: Cents = Field(ge=0)
-    medicare_medicaid_cents: Cents = Field(default=0, ge=0)
-    medical_liens_cents: Cents = Field(default=0, ge=0)
-    funding_payoff_cents: Cents = Field(default=0, ge=0)
-    attorney_fees_cents: Cents = Field(default=0, ge=0)
-    plaintiff_remainder_cents: Cents
+    case_id: str
+    settlement_cents: int
+    waterfall: list[WaterfallLine]
+    plaintiff_remainder_cents: int
 
-    def recompute_allocated_total(self) -> int:
-        """Sum of all waterfall buckets including plaintiff remainder."""
-        return (
-            self.medicare_medicaid_cents
-            + self.medical_liens_cents
-            + self.funding_payoff_cents
-            + self.attorney_fees_cents
-            + self.plaintiff_remainder_cents
-        )
+    @field_validator("settlement_cents", "plaintiff_remainder_cents", mode="before")
+    @classmethod
+    def _top_level_cents(cls, v: Any, info: ValidationInfo) -> int:
+        return validate_cents(v, info.field_name or "cents")
 
     @model_validator(mode="after")
-    def allocations_match_settlement(self) -> SettlementDisbursement:
-        allocated = self.recompute_allocated_total()
-        if allocated != self.settlement_amount_cents:
-            msg = (
-                f"settlement_amount_cents ({self.settlement_amount_cents}) must equal "
-                f"sum of allocations ({allocated})"
-            )
-            raise ValueError(msg)
+    def plaintiff_remainder_non_negative(self) -> SettlementDisbursement:
         if self.plaintiff_remainder_cents < 0:
             msg = (
                 f"INV-09: plaintiff_remainder_cents ({self.plaintiff_remainder_cents}) "
@@ -48,43 +52,23 @@ class SettlementDisbursement(BaseModel):
             raise ValueError(msg)
         return self
 
-class WaterfallLineItem(BaseModel):
-    """Single slice of a settlement waterfall (ordered disbursement line)."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    category: str
-    amount_cents: Cents = Field(ge=0)
-    order_index: int = 0
-
-class WaterfallResult(BaseModel):
-    """INV-07: Line items plus plaintiff remainder must reconcile to settlement total."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    settlement_id: str
-    settlement_amount_cents: Cents = Field(ge=0)
-    line_items: list[WaterfallLineItem]
-    plaintiff_remainder_cents: Cents
-
-    def recompute_line_items_sum(self) -> int:
-        return sum(item.amount_cents for item in self.line_items)
+    @model_validator(mode="after")
+    def waterfall_sorted_by_priority(self) -> SettlementDisbursement:
+        ranks = [line.priority_rank for line in self.waterfall]
+        if ranks != sorted(ranks):
+            msg = "waterfall must be sorted by priority_rank ascending"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
-    def totals_reconcile(self) -> WaterfallResult:
-        lines = self.recompute_line_items_sum()
-        total = lines + self.plaintiff_remainder_cents
-        if total != self.settlement_amount_cents:
+    def settlement_reconciles(self) -> SettlementDisbursement:
+        paid = sum(line.amount_paid_cents for line in self.waterfall)
+        total = paid + self.plaintiff_remainder_cents
+        if total != self.settlement_cents:
             msg = (
-                f"Waterfall mismatch: settlement_amount_cents={self.settlement_amount_cents}, "
-                f"line_items_sum={lines}, plaintiff_remainder_cents="
-                f"{self.plaintiff_remainder_cents}, combined={total}"
-            )
-            raise ValueError(msg)
-        if self.plaintiff_remainder_cents < 0:
-            msg = (
-                f"INV-09: plaintiff_remainder_cents ({self.plaintiff_remainder_cents}) "
-                "must be >= 0"
+                f"settlement_cents ({self.settlement_cents}) must equal "
+                f"sum(waterfall amount_paid_cents) + plaintiff_remainder_cents "
+                f"({paid} + {self.plaintiff_remainder_cents} = {total})"
             )
             raise ValueError(msg)
         return self

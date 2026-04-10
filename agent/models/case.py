@@ -4,7 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from agent.models.money import Cents
+from agent.models.money import validate_cents
 
 class CaseStatus(str, Enum):
     """INV-02: Terminal states must block new funding approvals."""
@@ -37,11 +37,10 @@ class Case(BaseModel):
     case_id: str = Field(min_length=1)
     status: CaseStatus
     jurisdiction: Jurisdiction
-    case_max_exposure_cents: Cents | None = None
+    case_max_exposure_cents: int | None = None
 
     @model_validator(mode="after")
     def exposure_non_negative_when_set(self) -> Case:
-        if self.case_max_exposure_cents is not None and self.case_max_exposure_cents < 0:
-            msg = "case_max_exposure_cents must be >= 0 when provided"
-            raise ValueError(msg)
+        if self.case_max_exposure_cents is not None:
+            validate_cents(self.case_max_exposure_cents, "case_max_exposure_cents")
         return self
