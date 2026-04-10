@@ -99,9 +99,39 @@ def attack_closed_case_funding(c: FundingClient) -> AttackResult:
             except Exception:
                 log.warning("cleanup_failed", application_id=aid)
 
-def attack_disburse_without_attorney_ack(c: DisbursementClient) -> AttackResult:
-    """INV-03: Attorney acknowledgment must exist and be dated before funds disburse."""
-    raise NotImplementedError
+def attack_disburse_without_attorney_ack(c: FundingClient) -> AttackResult:
+    """
+    INV-03: Attorney acknowledgment must exist and be dated before funds disburse.
+
+    Invariant rule: "Attorney acknowledgment must exist and be dated before funds disburse"
+    Blast radius: "Legal liability / clawback"
+    """
+    created_ids: list[str] = []
+    try:
+        CASE_ID = os.environ["MOVEDOCS_SEED_CASE_ID"]
+        DISBURSE_DAY = date.fromisoformat(os.environ["MOVEDOCS_DISBURSEMENT_DATE"])
+        app_1 = c.apply(case_id=CASE_ID, amount_cents=500_000)
+        created_ids.append(app_1.json()["application_id"])
+        c.approve_funding(application_id=created_ids[0])
+        disb = c.disburse_funding(application_id=created_ids[0], disbursement_date=DISBURSE_DAY)
+        body_d = disb.json()
+
+        if disb.status_code in (200, 201):
+            return AttackResult(
+                rule="INV-03", status="BREACHED",
+                evidence={"app_1": app_1.json(), "disburse": body_d},
+                reasoning="Platform disbursed without a recorded attorney acknowledgment dated before disbursement.",
+            )
+        elif disb.status_code == 422:
+            return AttackResult(rule="INV-03", status="HELD",
+                                evidence=body_d, reasoning="Disbursement correctly blocked without attorney acknowledgment.")
+        else:
+            return AttackResult(rule="INV-03", status="INDETERMINATE",
+                                evidence=body_d, reasoning="Unexpected status — Judge to evaluate.")
+    finally:
+        for aid in created_ids:
+            try: c.cancel(aid)
+            except Exception: log.warning("cleanup_failed", application_id=aid)
 
 def attack_payoff_component_mismatch(c: FundingClient) -> AttackResult:
     """INV-04: Payoff equals principal + accrued interest + fees from disbursement_date accrual."""
@@ -177,6 +207,92 @@ def attack_float_payoff(c: FundingClient) -> AttackResult:
         reasoning="total_cents missing or unexpected type for INV-11 evaluation.",
     )
 
+def attack_interest_from_application_date(c: FundingClient) -> AttackResult:
+    """
+    INV-04: Payoff = principal_cents + accrued_interest_cents + fees_cents; interest accrues from disbursement_date, not application_date.
+
+    Invariant rule: "Payoff = principal_cents + accrued_interest_cents + fees_cents; interest accrues from disbursement_date, not application_date"
+    Blast radius: "Direct $ — overcharge or undercharge plaintiff"
+    """
+    try:
+        contract_id = os.environ.get("MOVEDOCS_CONTRACT_ID", "CONTRACT-SEED-001")
+        payoff_day = date.today()
+        r = c.get_payoff(contract_id, payoff_day)
+        body = r.json()
+
+        if r.status_code != 200:
+            return AttackResult(
+                rule="INV-04",
+                status="INDETERMINATE",
+                evidence={"status_code": r.status_code, "body": body},
+                reasoning="Payoff GET did not return 200; cannot evaluate interest accrual basis.",
+            )
+
+        required = (
+            "interest_start_date",
+            "disbursement_date",
+            "principal_cents",
+            "rate_bps",
+            "days_elapsed",
+        )
+        missing = [k for k in required if k not in body]
+        if missing:
+            return AttackResult(
+                rule="INV-04",
+                status="INDETERMINATE",
+                evidence=body if isinstance(body, dict) else {"body": body},
+                reasoning=f"Payoff response missing required field(s) for INV-04: {', '.join(missing)}.",
+            )
+
+        interest_start_date = body["interest_start_date"]
+        disbursement_date = body["disbursement_date"]
+        principal_cents = int(body["principal_cents"])
+        rate_bps = int(body["rate_bps"])
+        _ = int(body["days_elapsed"])
+
+        d_start = date.fromisoformat(str(interest_start_date))
+        d_disb = date.fromisoformat(str(disbursement_date))
+
+        if d_start == d_disb:
+            return AttackResult(
+                rule="INV-04",
+                status="HELD",
+                evidence=body,
+                reasoning="Interest correctly accrues from disbursement_date.",
+            )
+
+        correct_days = (payoff_day - d_disb).days
+        wrong_days = (payoff_day - d_start).days
+        overcharge_days = wrong_days - correct_days
+        overcharge_cents = (principal_cents * rate_bps * overcharge_days) // (10_000 * 365)
+        oc = overcharge_cents
+        overcharge_dollars = f"${oc // 100}.{oc % 100:02d}"
+
+        return AttackResult(
+            rule="INV-04",
+            status="BREACHED",
+            evidence={
+                "interest_start_date": interest_start_date,
+                "disbursement_date": disbursement_date,
+                "overcharge_days": overcharge_days,
+                "overcharge_cents": overcharge_cents,
+                "overcharge_dollars": overcharge_dollars,
+            },
+            reasoning=(
+                f"Interest accrues from {interest_start_date} (application date) "
+                f"instead of {disbursement_date} (disbursement date). "
+                f"Plaintiff overcharged by {overcharge_days} days = "
+                f"{overcharge_cents} cents ({overcharge_dollars})."
+            ),
+        )
+    except Exception as exc:
+        return AttackResult(
+            rule="INV-04",
+            status="INDETERMINATE",
+            evidence={"exception": repr(exc)},
+            reasoning="INV-04 payoff inspection failed before a verdict could be formed.",
+        )
+
 def attack_interest_day_count_basis(c: FundingClient) -> AttackResult:
     """INV-12: Interest uses exact calendar day count from disbursement_date to payoff_date."""
     raise NotImplementedError
@@ -185,5 +301,7 @@ AttackFn = Callable[..., AttackResult]
 
 ATTACKS: dict[str, Callable[[FundingClient], AttackResult]] = {
     "duplicate_funding": attack_duplicate_funding,
+    "disburse_without_attorney_ack": attack_disburse_without_attorney_ack,  # INV-03: disburse without ack
     "float_payoff": attack_float_payoff,
+    "interest_from_application_date": attack_interest_from_application_date,  # INV-04: interest from application date
 }
