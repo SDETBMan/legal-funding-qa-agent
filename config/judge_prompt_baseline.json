@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "prompts": {
+    "waterfall_judge": {
+      "sha256": "53fb30133d931e877d09a19da4756397e7dd06aebb74f8de4869457d62615fd8",
+      "eval_score": 0.94
+    },
+    "ui_reconciliation_judge": {
+      "sha256": "12f32591503e976e86c2e6804bdf820add51322ac251c1c40df4b547438bb6e2",
+      "eval_score": 0.91
+    }
+  }
+}
