@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -14,6 +15,15 @@ import structlog
 
 from agent.adversary.attacks import ATTACKS, AttackResult
 from agent.clients.funding_client import FundingClient
+from agent.guardrails import create_guarded_agent_state, fallback_config, prepare_langgraph_invoke
+from agent.graph import KNOWN_ATTACKS, invoke_run_attack_graph
+from agent.pii_redactor import PIIRedactor
+from agent.retry_policy import with_retry
+from agent.run_limits import RateLimitExceeded, RunLimits
+from judge.drift_check import log_judge_prompt_drift_warnings
+from judge.prompts import get_prompt_fingerprints, write_baseline_file
+from guardrails.summarization_middleware import SummarizationMiddleware
+from guardrails.tool_selector_middleware import ToolSelectorMiddleware, ToolSpec
 
 log = structlog.get_logger(__name__)
 
@@ -143,8 +153,8 @@ def _build_report(
         "started_at": started,
         "api_base": _redact_api_base(api_base_raw),
         "prompt_versions": {
-            "waterfall_judge": "not_run",
-            "ui_reconciliation_judge": "not_run",
+            k: f"sha256:{fp['sha256']}"
+            for k, fp in get_prompt_fingerprints().items()
         },
         "happy_path": {
             "status": "SKIP",
@@ -268,8 +278,137 @@ def _agentops_session_url() -> str | None:
     return None
 
 
+def run_guardrails_smoke_test() -> dict[str, Any]:
+    """
+    Standalone demo: synthetic PII + funding cents through guardrails and one rate-limit tick.
+
+    Does not call the LangGraph. Does not require ``MOVEDOCS_API_BASE``.
+    """
+    raw_payload: dict[str, Any] = {
+        "plaintiff_ssn": "123-45-6789",
+        "plaintiff_email": "plaintiff@example.com",
+        "funding_amount_cents": 500_000,
+        "memo": "Reach plaintiff@example.com about the 123-45-6789 file before funding.",
+    }
+
+    guarded = create_guarded_agent_state(raw_payload)
+    limits = guarded["_run_limits"]
+    limits.check_and_increment_tool("smoke_test")
+
+    print("--- guardrails smoke test ---")
+    print("Original payload (sensitive fields):")
+    print(f"  plaintiff_ssn: {raw_payload['plaintiff_ssn']!r}")
+    print(f"  plaintiff_email: {raw_payload['plaintiff_email']!r}")
+    print(f"  funding_amount_cents: {raw_payload['funding_amount_cents']} (integer cents, INV-11)")
+    print(f"  memo: {raw_payload['memo']!r}")
+    print()
+    print("After create_guarded_agent_state() (string values redacted where detected):")
+    for key in ("plaintiff_ssn", "plaintiff_email", "memo"):
+        print(f"  {key}: {guarded.get(key, '')!r}")
+    print(f"  funding_amount_cents: {guarded.get('funding_amount_cents')!r} (unchanged; not a str field)")
+    print()
+    print("limits.summary():")
+    print(json.dumps(limits.summary(), indent=2))
+    print("--- end smoke test ---")
+
+    # ---------------------------------------------------------------------
+    # Demo: ToolSelectorMiddleware (heuristic mode; always keep search)
+    # ---------------------------------------------------------------------
+    selector = ToolSelectorMiddleware(llm=None, fast_model="claude-haiku", max_tools=3)
+    sample_tools = [
+        ToolSpec(name="search", description="Search docs/code for relevant references.", is_search=True),
+        ToolSpec(name="api_validate", description="Call API and validate payoff calculation fields."),
+        ToolSpec(name="playwright_execute", description="Run Playwright flow to verify payoff shown in UI."),
+        ToolSpec(name="db_query", description="Run a SQL query for the funding application."),
+        ToolSpec(name="email_notify", description="Send an email to stakeholders about the run."),
+        ToolSpec(name="artifact_write", description="Write artifacts/report.json to disk."),
+    ]
+    sample_goal = "validate funding application payoff calculation"
+
+    print()
+    print("--- tool selector middleware demo ---")
+    print(f"Goal: {sample_goal!r}")
+    print("Tools BEFORE:")
+    for t in sample_tools:
+        print(f"  - {t.name}{' (search)' if t.is_search else ''}: {t.description}")
+
+    async def _run_tool_select() -> list[ToolSpec]:
+        return await selector.select_tools(goal=sample_goal, tools=sample_tools, trace_context={"demo": "guardrails"})
+
+    selected = asyncio.run(_run_tool_select())
+
+    print("Tools AFTER (top 3, always including search):")
+    for t in selected:
+        print(f"  - {t.name}{' (search)' if t.is_search else ''}: {t.description}")
+    print("--- end tool selector demo ---")
+
+    # ---------------------------------------------------------------------
+    # Demo: SummarizationMiddleware (heuristic mode; triggers with small window)
+    # ---------------------------------------------------------------------
+    summarizer = SummarizationMiddleware(
+        llm=None,
+        fast_model="claude-haiku",
+        context_window_tokens=250,
+        trigger_ratio=0.80,
+        keep_last_n=20,
+    )
+    # Create 25 messages with enough content to exceed the small token window.
+    sample_history: list[dict[str, str]] = []
+    for i in range(25):
+        role = "user" if i % 2 == 0 else "assistant"
+        content = (
+            f"message {i}: validate payoff calculation invariant INV-04 and cents integrity INV-11. "
+            "Include context about disbursement_date day count and payoff recomputation. "
+            + ("x" * 120)
+        )
+        sample_history.append({"role": role, "content": content})
+
+    print()
+    print("--- summarization middleware demo ---")
+    print(f"Messages BEFORE: {len(sample_history)}")
+    print(f"Estimated tokens BEFORE: {summarizer.estimate_tokens(sample_history)}")
+    print("First 2 messages BEFORE:")
+    for m in sample_history[:2]:
+        print(f"  - {m['role']}: {m['content'][:90]}...")
+    print("Last 2 messages BEFORE:")
+    for m in sample_history[-2:]:
+        print(f"  - {m['role']}: {m['content'][:90]}...")
+
+    async def _run_summarize() -> list[dict[str, str]]:
+        return await summarizer.maybe_summarize(messages=sample_history, trace_context={"demo": "guardrails"})
+
+    summarized = asyncio.run(_run_summarize())
+
+    print(f"Messages AFTER: {len(summarized)}")
+    print(f"Estimated tokens AFTER: {summarizer.estimate_tokens(summarized)}")
+    print("First 2 messages AFTER:")
+    for m in summarized[:2]:
+        print(f"  - {m['role']}: {m['content'][:120]}...")
+    print("Last 2 messages AFTER (should match last two of BEFORE):")
+    for m in summarized[-2:]:
+        print(f"  - {m['role']}: {m['content'][:90]}...")
+    print("--- end summarization demo ---")
+
+    return guarded
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agent.main")
+    parser.add_argument(
+        "--demo-guardrails",
+        action="store_true",
+        help="Run PII + rate-limit smoke demo and exit (no API, no graph).",
+    )
+    parser.add_argument(
+        "--write-judge-baseline",
+        action="store_true",
+        help="Write config/judge_prompt_baseline.json from judge.prompts (hashlib SHA-256) and exit.",
+    )
+    parser.add_argument(
+        "--skip-prompt-check",
+        action="store_true",
+        help="Skip pre-deploy judge prompt drift check (Drift Triangle).",
+    )
     parser.add_argument(
         "--attack",
         type=str,
@@ -289,6 +428,18 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
+    if args.demo_guardrails:
+        run_guardrails_smoke_test()
+        raise SystemExit(0)
+
+    if args.write_judge_baseline:
+        path = write_baseline_file()
+        print(f"wrote judge prompt baseline: {path}")
+        raise SystemExit(0)
+
+    if not args.skip_prompt_check:
+        log_judge_prompt_drift_warnings()
+
     if "MOVEDOCS_API_BASE" not in os.environ:
         print("error: MOVEDOCS_API_BASE is not set", file=sys.stderr)
         raise SystemExit(1)
@@ -303,14 +454,27 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _run_single_attack(attack_name: str) -> None:
-    from agent.graph import KNOWN_ATTACKS, run_named_attack
-
     if attack_name not in KNOWN_ATTACKS:
         print(f"Unknown attack: {attack_name!r}", file=sys.stderr)
         raise SystemExit(1)
 
+    log.debug(
+        "qa_guardrails_entrypoint",
+        pii_class=PIIRedactor.__name__,
+        limits_class=RunLimits.__name__,
+        fallback_model=fallback_config.get_current_model(),
+        retry_decorator=with_retry.__name__,
+    )
+
     client = FundingClient()
-    final_state = run_named_attack(client, attack_name)
+    invoke_state, run_limits = prepare_langgraph_invoke({"attack_name": attack_name})
+    try:
+        final_state = invoke_run_attack_graph(client, invoke_state, run_limits)
+    except RateLimitExceeded as exc:
+        log.error("rate_limit_exceeded", error=str(exc))
+        print(f"error: rate limit exceeded: {exc}", file=sys.stderr)
+        _agentops_end_trace("BLOCK")
+        raise SystemExit(2) from exc
     result = final_state["result"]
     rule = result["rule"]
     status = result["status"]
