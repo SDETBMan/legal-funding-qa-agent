@@ -8,6 +8,12 @@ Full architecture documentation lives in README.md. Design decisions live in DEC
 
 ## 1. Workflow Orchestration
 
+### This File Is Alive
+- Every correction becomes a rule. Every stale rule gets deleted.
+- Monthly review: prune first, then add.
+- If a rule hasn't been relevant in 30 days, delete it.
+- A file that only grows is documentation. A file that evolves is a contract.
+
 ### Plan Mode Default
 - Enter plan mode for ANY task with 3+ steps or architectural decisions
 - If something goes sideways, STOP and re-plan immediately
@@ -24,6 +30,12 @@ Full architecture documentation lives in README.md. Design decisions live in DEC
 - After ANY correction from the human: update DECISIONS.md with the pattern
 - Write the rule that prevents the same mistake
 - Review SESSIONS.md and DECISIONS.md at the start of every session
+
+### Pruning Rule
+- Monthly: review every rule in this file
+- Delete stale rules immediately — a wrong rule is worse than no rule
+- Merge overlapping rules into one
+- This file should shrink over time as patterns stabilize, not grow
 
 ### Autonomous Bug Fixing
 - Given a bug report: just fix it — point at logs, errors, failing tests
@@ -190,6 +202,9 @@ result = await run_agent_node(raw_input)  # no
 - Offload research, exploration, and parallel analysis to subagents
 - One task per subagent for focused execution
 - Throw more compute at complex problems via subagents
+- Context isolation is the primary reason for subagent separation —
+  not token cost. A judge that has seen the attack execution context
+  is a compromised judge. Keep contexts clean.
 
 ---
 
