@@ -24,7 +24,7 @@ def _safe_json(r: httpx.Response) -> dict:
 
 class FundingClient:
     """
-    Typed httpx wrapper for MoveDocs funding, cases, liens, and settlement endpoints.
+    Typed httpx wrapper for legal funding platform — cases, liens, and settlement endpoints.
 
     Every call is logged before send and after receive (§6.1). Money in bodies must
     be integer cents per INV-11.

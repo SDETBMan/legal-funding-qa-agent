@@ -43,7 +43,7 @@
 ## Claude Code CLI Shortcuts Reference
 *Added 2026-04-28 — reference for daily framework development workflow*
 
-Key commands for the MoveDocs agentic framework:
+Key commands for the legal funding agentic framework:
 
 ### Cost & Context
 - /cost — token usage for session

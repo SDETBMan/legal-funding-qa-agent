@@ -1,7 +1,7 @@
 """
 mock_api/main.py — Legal Funding Mock API
 
-A self-contained FastAPI server that simulates the MoveDocs/Libra
+A self-contained FastAPI server that simulates a legal funding platform
 Solutions funding platform. Used for local development and demo runs
 of the QA agent.
 

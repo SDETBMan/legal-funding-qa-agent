@@ -335,7 +335,7 @@ The full, step-by-step contributor workflow (including the code review checklist
 
 ```bash
 git clone <repository-url>
-cd MoveDocs
+cd legal-funding-qa-agent
 cp .env.example .env
 # add keys (e.g. MOVEDOCS_API_BASE=http://localhost:8000 for the mock API)
 docker-compose up -d
