@@ -282,7 +282,7 @@ def run_guardrails_smoke_test() -> dict[str, Any]:
     """
     Standalone demo: synthetic PII + funding cents through guardrails and one rate-limit tick.
 
-    Does not call the LangGraph. Does not require ``MOVEDOCS_API_BASE``.
+    Does not call the LangGraph. Does not require ``FUNDING_API_BASE``.
     """
     raw_payload: dict[str, Any] = {
         "plaintiff_ssn": "123-45-6789",
@@ -440,8 +440,8 @@ def main(argv: list[str] | None = None) -> None:
     if not args.skip_prompt_check:
         log_judge_prompt_drift_warnings()
 
-    if "MOVEDOCS_API_BASE" not in os.environ:
-        print("error: MOVEDOCS_API_BASE is not set", file=sys.stderr)
+    if "FUNDING_API_BASE" not in os.environ:
+        print("error: FUNDING_API_BASE is not set", file=sys.stderr)
         raise SystemExit(1)
 
     _agentops_init()
@@ -505,7 +505,7 @@ def _run_all_attacks() -> None:
         adversarial.append(row)
 
     report = _build_report(
-        api_base_raw=os.environ.get("MOVEDOCS_API_BASE", ""),
+        api_base_raw=os.environ.get("FUNDING_API_BASE", ""),
         adversarial=adversarial,
     )
     _write_report(report)

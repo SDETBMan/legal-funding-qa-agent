@@ -251,7 +251,7 @@ Judge drift protection: `python main.py --write-judge-baseline` after every succ
 | `except: pass` | Swallows breach evidence | Log it, mark INDETERMINATE |
 | Attacks without cleanup | Pollutes shared staging | `try/finally` cancel/void |
 | Status-code-only verdicts | 200 with a float is a breach | Always inspect the body |
-| Hardcoded base URL | Breaks across environments | `os.environ["MOVEDOCS_API_BASE"]` |
+| Hardcoded base URL | Breaks across environments | `os.environ["FUNDING_API_BASE"]` |
 | Month-approximated interest | Material $ error at portfolio scale | Exact calendar day count |
 | Silent self-healing selector updates | Engineers must review | Write to `artifacts/selector_repairs.json` |
 | AI-generated code merged without staging run | Untested code in release pipeline | Always execute before merging |

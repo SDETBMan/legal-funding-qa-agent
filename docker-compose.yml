@@ -21,7 +21,7 @@ services:
       mock-api:
         condition: service_healthy
     environment:
-      - MOVEDOCS_API_BASE=http://mock-api:8000
+      - FUNDING_API_BASE=http://mock-api:8000
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ./artifacts:/app/artifacts

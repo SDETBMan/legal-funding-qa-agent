@@ -35,7 +35,7 @@ class FundingClient:
         if client is not None:
             self._client = client
         else:
-            base_url = os.environ["MOVEDOCS_API_BASE"]
+            base_url = os.environ["FUNDING_API_BASE"]
             self._client = httpx.Client(base_url=base_url)
 
     def _log_call(
@@ -140,7 +140,7 @@ class FundingClient:
 
     def apply(self, case_id: str, amount_cents: int) -> httpx.Response:
         """§6.5 attack template: ``apply`` delegates to the wire API with a default applicant name."""
-        applicant_name = os.environ.get("MOVEDOCS_ATTACK_APPLICANT_NAME", "QA adversary agent")
+        applicant_name = os.environ.get("FUNDING_ATTACK_APPLICANT_NAME", "QA adversary agent")
         return self.apply_for_funding(case_id, amount_cents, applicant_name)
 
     def cancel(self, application_id: str) -> httpx.Response:
@@ -232,6 +232,22 @@ class FundingClient:
             json_body=json_body,
         )
         response = self._client.post(path, json=json_body)
+        self._log_response(endpoint=endpoint, response=response)
+        return response
+
+    def get_contract(self, contract_id: str) -> httpx.Response:
+        endpoint = f"GET /contracts/{contract_id}"
+        path = f"/contracts/{contract_id}"
+        self._log_call(endpoint=endpoint, method="GET", path=path, params=None, json_body=None)
+        response = self._client.get(path)
+        self._log_response(endpoint=endpoint, response=response)
+        return response
+
+    def get_case_capacity(self, case_id: str) -> httpx.Response:
+        endpoint = f"GET /cases/{case_id}/capacity"
+        path = f"/cases/{case_id}/capacity"
+        self._log_call(endpoint=endpoint, method="GET", path=path, params=None, json_body=None)
+        response = self._client.get(path)
         self._log_response(endpoint=endpoint, response=response)
         return response
 

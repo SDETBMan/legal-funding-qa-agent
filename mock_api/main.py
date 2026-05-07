@@ -9,6 +9,12 @@ INTENTIONAL BUGS (the agent must find these):
   BUG-01 [INV-11]: GET /funding/{id}/payoff returns total_cents as float
   BUG-02 [INV-04]: Interest accrues from application_date, not disbursement_date
   BUG-03 [INV-07]: Settlement waterfall does not enforce Medicare super-priority
+  BUG-04 [INV-05]: Approve does not re-check case_max_exposure (apply checks it,
+                    but approve + amount change could bypass)
+  BUG-05 [INV-06]: Seed contract rate_bps (3500) exceeds TX usury cap (1800 bps)
+  BUG-06 [INV-08]: Lien balance > original_billed accepted (validator removed)
+  BUG-07 [INV-09]: Settlement allows negative plaintiff remainder
+  BUG-08 [INV-10]: Cancelled applications do not release reserved capacity
 
 All other invariants are correctly implemented so the agent produces
 a mix of BREACHED and HELD results — a realistic demo output.
@@ -38,6 +44,7 @@ from pydantic import BaseModel, Field, model_validator
 
 PARK_TZ = ZoneInfo("America/Chicago")
 BASE_RATE_BPS = 350          # 3.5% — within all state usury caps
+SEED_RATE_BPS = 3500         # 35% — BUG-05: exceeds TX usury cap of 1800 bps
 MAX_FUNDING_RATIO = 0.20     # fund up to 20% of estimated case value
 STANDARD_FEE_CENTS = 25_00  # $25.00 flat origination fee
 
@@ -56,6 +63,7 @@ applications: dict[str, dict] = {}
 contracts: dict[str, dict] = {}
 liens: dict[str, list[dict]] = {}       # case_id -> list of liens
 settlements: dict[str, dict] = {}      # case_id -> settlement record
+reserved_capacity: dict[str, int] = {}  # case_id -> reserved cents (BUG-08: not released on cancel)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -105,14 +113,8 @@ class CreateLienRequest(BaseModel):
     lienholder_name: str
     priority_rank: int = Field(ge=1)
 
-    @model_validator(mode="after")
-    def balance_le_billed(self) -> CreateLienRequest:
-        if self.balance_cents > self.original_billed_cents:
-            raise ValueError(
-                f"balance_cents ({self.balance_cents}) cannot exceed "
-                f"original_billed_cents ({self.original_billed_cents})"
-            )
-        return self
+    # BUG-06 [INV-08]: Validator intentionally removed — balance_cents > original_billed_cents
+    # is accepted. The agent's attack_lien_balance_exceeds_billed must detect this.
 
 class RecordSettlementRequest(BaseModel):
     settlement_cents: int = Field(gt=0)
@@ -136,6 +138,7 @@ def seed_data() -> None:
         "plaintiff_name": "Maria Santos",
         "attorney_name": "James Holloway",
         "estimated_settlement_cents": 250_000_00,  # $250,000
+        "case_max_exposure_cents": 50_000_00,       # $50,000 max exposure
         "jurisdiction": "IL",
         "status": CaseStatus.ACTIVE,
         "created_at": "2025-01-15T09:00:00-06:00",
@@ -169,6 +172,7 @@ def seed_data() -> None:
         "plaintiff_name": "David Kowalski",
         "attorney_name": "Patricia Lee",
         "estimated_settlement_cents": 180_000_00,
+        "case_max_exposure_cents": 36_000_00,       # $36,000 max exposure
         "jurisdiction": "TX",
         "status": CaseStatus.ACTIVE,
         "created_at": "2025-02-01T10:00:00-06:00",
@@ -199,9 +203,10 @@ def seed_data() -> None:
         "application_id": app_id_2,
         "case_id": c2_id,
         "principal_cents": 5_000_00,
-        "rate_bps": BASE_RATE_BPS,
+        "rate_bps": SEED_RATE_BPS,                      # BUG-05: 3500 bps exceeds TX cap of 1800
         "application_date": str(application_date_2),    # stored for BUG-02
         "disbursement_date": str(disbursement_date_2),
+        "jurisdiction": "TX",
         "status": ApplicationStatus.DISBURSED,
     }
 
@@ -212,6 +217,7 @@ def seed_data() -> None:
         "plaintiff_name": "Robert Chen",
         "attorney_name": "Susan Park",
         "estimated_settlement_cents": 95_000_00,
+        "case_max_exposure_cents": 19_000_00,       # $19,000 max exposure
         "jurisdiction": "CA",
         "status": CaseStatus.SETTLED,
         "created_at": "2024-11-01T10:00:00-06:00",
@@ -241,11 +247,13 @@ def get_case(case_id: str) -> dict:
 @app.post("/cases", status_code=status.HTTP_201_CREATED)
 def create_case(req: CreateCaseRequest) -> dict:
     case_id = f"CASE-{uuid.uuid4().hex[:6].upper()}"
+    max_exposure = int(req.estimated_settlement_cents * MAX_FUNDING_RATIO)
     case = {
         "case_id": case_id,
         "plaintiff_name": req.plaintiff_name,
         "attorney_name": req.attorney_name,
         "estimated_settlement_cents": req.estimated_settlement_cents,
+        "case_max_exposure_cents": max_exposure,
         "jurisdiction": req.jurisdiction,
         "status": CaseStatus.ACTIVE,
         "created_at": datetime.now(tz=PARK_TZ).isoformat(),
@@ -319,19 +327,34 @@ def apply_for_funding(req: ApplyRequest) -> dict:
         "contract_id": None,
     }
     applications[app_id] = application
+    # BUG-08 [INV-10]: Track reserved capacity (but cancel does NOT release it)
+    reserved_capacity[req.case_id] = reserved_capacity.get(req.case_id, 0) + req.amount_cents
     return application
 
 
 @app.post("/funding/{application_id}/approve")
 def approve_funding(application_id: str) -> dict:
+    """
+    BUG-04 [INV-05]: Does NOT re-check case_max_exposure at approval time.
+    If the amount was changed between apply and approve, exposure could exceed the cap.
+    The attack exploits this by applying for an amount just under the cap on a fresh case
+    whose max_exposure is low.
+    """
     app = applications.get(application_id)
     if not app:
         raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
     if app["status"] != ApplicationStatus.PENDING:
         raise HTTPException(status_code=422, detail=f"Application is {app['status']}, not PENDING")
 
+    # BUG-04: No re-check of case_max_exposure_cents here (only checked at apply time)
     app["status"] = ApplicationStatus.APPROVED
-    return {"application_id": application_id, "status": ApplicationStatus.APPROVED}
+    case = cases.get(app["case_id"], {})
+    return {
+        "application_id": application_id,
+        "status": ApplicationStatus.APPROVED,
+        "case_max_exposure_cents": case.get("case_max_exposure_cents"),
+        "amount_cents": app["amount_cents"],
+    }
 
 
 @app.post("/funding/{application_id}/disburse")
@@ -364,6 +387,7 @@ def disburse_funding(application_id: str, req: DisburseRequest) -> dict:
         "rate_bps": BASE_RATE_BPS,
         "application_date": app["created_at"][:10],     # YYYY-MM-DD stored for BUG-02
         "disbursement_date": str(req.disbursement_date),
+        "jurisdiction": case.get("jurisdiction", "IL"),
         "status": ApplicationStatus.DISBURSED,
     }
     contracts[contract_id] = contract
@@ -452,6 +476,30 @@ def get_application(application_id: str) -> dict:
     if not app:
         raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
     return app
+
+
+@app.get("/contracts/{contract_id}")
+def get_contract(contract_id: str) -> dict:
+    contract = contracts.get(contract_id)
+    if not contract:
+        raise HTTPException(status_code=404, detail=f"Contract {contract_id} not found")
+    return contract
+
+
+@app.get("/cases/{case_id}/capacity")
+def get_case_capacity(case_id: str) -> dict:
+    """Returns reserved and available capacity for a case (INV-10 testing)."""
+    if case_id not in cases:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    case = cases[case_id]
+    max_exp = case.get("case_max_exposure_cents", 0)
+    reserved = reserved_capacity.get(case_id, 0)
+    return {
+        "case_id": case_id,
+        "case_max_exposure_cents": max_exp,
+        "reserved_cents": reserved,
+        "available_cents": max(0, max_exp - reserved),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +637,11 @@ def health() -> dict:
             "BUG-01 [INV-11]: GET /funding/{id}/payoff returns total_cents as float",
             "BUG-02 [INV-04]: Interest accrues from application_date, not disbursement_date",
             "BUG-03 [INV-07]: Waterfall does not enforce Medicare/Medicaid super-priority",
+            "BUG-04 [INV-05]: Approve does not re-check case_max_exposure",
+            "BUG-05 [INV-06]: Seed contract rate_bps (3500) exceeds TX usury cap (1800 bps)",
+            "BUG-06 [INV-08]: Lien balance > original_billed accepted",
+            "BUG-07 [INV-09]: Settlement allows negative plaintiff remainder",
+            "BUG-08 [INV-10]: Cancelled applications do not release reserved capacity",
         ],
         "seed_data": {
             "cases": list(cases.keys()),

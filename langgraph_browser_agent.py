@@ -64,7 +64,7 @@ async def playwright_execute_node(state: BrowserApiAgentState) -> BrowserApiAgen
         log.warning("playwright_not_installed", message="skipping browser step")
         return {**state, "playwright_status": "skipped_no_playwright"}
 
-    base = state.get("base_url") or os.environ.get("MOVEDOCS_UI_BASE", "about:blank")
+    base = state.get("base_url") or os.environ.get("FUNDING_UI_BASE", "about:blank")
     timeout_ms = int(os.environ.get("PLAYWRIGHT_TIMEOUT_MS", "30000"))
 
     async with async_playwright() as p:
@@ -92,9 +92,9 @@ async def api_validate_node(state: BrowserApiAgentState) -> BrowserApiAgentState
 
     import httpx
 
-    base = os.environ.get("MOVEDOCS_API_BASE")
+    base = os.environ.get("FUNDING_API_BASE")
     if not base:
-        log.warning("api_validate_skipped", reason="MOVEDOCS_API_BASE unset")
+        log.warning("api_validate_skipped", reason="FUNDING_API_BASE unset")
         return {**state, "api_validation_status": "skipped_no_api_base"}
 
     url = f"{base.rstrip('/')}/cases"
@@ -135,8 +135,8 @@ async def run_guarded_graph(raw_input: dict[str, Any]) -> BrowserApiAgentState:
 
 async def _cli_async() -> None:
     raw: dict[str, Any] = {
-        "case_id": os.environ.get("MOVEDOCS_SEED_CASE_ID", ""),
-        "base_url": os.environ.get("MOVEDOCS_UI_BASE", "https://example.com"),
+        "case_id": os.environ.get("FUNDING_SEED_CASE_ID", ""),
+        "base_url": os.environ.get("FUNDING_UI_BASE", "https://example.com"),
     }
     out = await run_guarded_graph(raw)
     log.info("agent_run_complete", rate_limit_summary=out.get("rate_limit_summary"))

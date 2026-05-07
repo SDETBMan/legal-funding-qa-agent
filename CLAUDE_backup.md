@@ -652,7 +652,7 @@ class ReconciliationVerifier:
 - name: Run QA Agent
   run: python -m agent.main
   env:
-    MOVEDOCS_API_BASE: ${{ secrets.STAGING_API_BASE }}
+    FUNDING_API_BASE: ${{ secrets.STAGING_API_BASE }}
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
 - name: Evaluate release gate
@@ -744,7 +744,7 @@ This team uses Claude and Cursor as first-class development tools. When generati
 | `except: pass` | Swallows breach evidence | Log it, mark INDETERMINATE |
 | Attacks without cleanup | Pollutes shared staging environment | `try/finally` cancel/void |
 | Status-code-only verdicts | A 200 with a float is a breach | Always inspect the body |
-| Hardcoded base URL | See §6 | `os.environ["MOVEDOCS_API_BASE"]` |
+| Hardcoded base URL | See §6 | `os.environ["FUNDING_API_BASE"]` |
 | Month-approximated interest | Material $ error at portfolio scale | Exact calendar day count |
 | Asserting lien order by array position | Array order is not legal priority | Check `priority_rank` field |
 | Silent self-healing selector updates | Engineers must review proposed fixes | Write to `artifacts/selector_repairs.json` |

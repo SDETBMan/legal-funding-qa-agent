@@ -1,0 +1,62 @@
+name: QA Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  FUNDING_API_BASE: http://localhost:8000
+  FUNDING_SEED_CASE_ID: CASE-001
+  FUNDING_CLOSED_CASE_ID: CASE-003
+  FUNDING_CONTRACT_ID: CONTRACT-SEED-001
+  FUNDING_PAYOFF_DATE: "2025-06-01"
+  FUNDING_DISBURSEMENT_DATE: "2025-02-10"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/ -v
+
+  qa-gate:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start mock API
+        run: |
+          uvicorn mock_api.main:app --host 0.0.0.0 --port 8000 &
+          sleep 3
+          curl -f http://localhost:8000/health
+
+      - name: Run QA agent (release gate)
+        run: python -m agent.main
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: artifacts/report.json
