@@ -54,6 +54,7 @@ jobs:
 
       - name: Run QA agent (release gate)
         run: python -m agent.main
+        continue-on-error: true  # Exit 1 (BLOCK) expected — mock API has intentional bugs
 
       - name: Upload report artifact
         if: always()

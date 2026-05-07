@@ -102,6 +102,7 @@ INV-05 | exceeds_case_max_exposure           | MEDIUM   | HELD     | Application
 INV-06 | usury_rate_cap                      | CRITICAL | BREACHED | Contract rate 3500 bps exceeds TX cap of 1800 bps.
 INV-07 | waterfall_priority                  | CRITICAL | BREACHED | Medicare paid second despite super-priority.
 INV-08 | lien_balance_exceeds_billed         | HIGH     | BREACHED | Lien accepted with balance exceeding original billed.
+INV-09 | negative_plaintiff_remainder        | CRITICAL | BREACHED | Settlement produced negative plaintiff remainder.
 INV-10 | cancelled_application_capacity_leak | MEDIUM   | BREACHED | Reserved capacity not released after cancel.
 INV-11 | float_payoff                        | CRITICAL | BREACHED | total_cents returned as float.
 INV-12 | interest_day_count_basis            | HIGH     | BREACHED | days_elapsed off by 9 days.
@@ -109,7 +110,7 @@ INV-12 | interest_day_count_basis            | HIGH     | BREACHED | days_elapse
 Release gate: BLOCK
 ```
 
-7 breaches detected, 5 invariants held. Exit code 1 (BLOCK).
+8 breaches detected, 4 invariants held. Exit code 1 (BLOCK).
 
 ---
 

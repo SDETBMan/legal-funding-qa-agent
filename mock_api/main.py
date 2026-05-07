@@ -575,9 +575,10 @@ def record_settlement(case_id: str, req: RecordSettlementRequest) -> dict:
     sorted_liens = sorted(case_liens, key=lambda x: x["priority_rank"])   # INTENTIONAL BUG
 
     for lien in sorted_liens:
-        pay_amount = min(lien["balance_cents"], settlement - running_total)
-        if pay_amount <= 0:
-            pay_amount = 0
+        # BUG-07 [INV-09]: pays full lien balance without checking if settlement
+        # covers it.  Correct implementation would cap at remaining funds and reject
+        # (or flag) when total obligations exceed settlement.
+        pay_amount = lien["balance_cents"]
         waterfall_lines.append({
             "lien_id": lien["lien_id"],
             "lienholder_name": lien["lienholder_name"],
