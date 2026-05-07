@@ -386,3 +386,11 @@ Release gate: BLOCK
 ## CLAUDE.md
 
 Every AI agent working in this repo is bound by [CLAUDE.md](CLAUDE.md) — a contract that defines invariants, forbidden patterns, contributor standards, and escalation rules.
+
+## License & Attribution
+MIT License — Copyright 2026 Brian Padgett
+
+This framework was independently developed prior to any employment engagement.
+All code, architecture decisions, and documentation represent original work
+authored and committed by Brian Padgett. Commit history and timestamps are
+the authoritative record of authorship.
