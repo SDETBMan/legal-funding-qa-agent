@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 env:
+  PYTHONPATH: .
   FUNDING_API_BASE: http://localhost:8000
   FUNDING_SEED_CASE_ID: CASE-001
   FUNDING_CLOSED_CASE_ID: CASE-003
