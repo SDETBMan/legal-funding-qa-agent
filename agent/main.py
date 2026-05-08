@@ -512,11 +512,19 @@ def _run_all_attacks() -> None:
 
     _print_summary_table(adversarial)
 
+    decision = report["release_recommendation"]["decision"]
+    summary = report["summary"]
+    print()
+    print(f"Release gate: {decision}")
+    print(
+        f"{summary['breached']} breached, {summary['held']} held, "
+        f"{summary['indeterminate']} indeterminate."
+    )
+
     url = _agentops_session_url()
     if url:
         print(f"AgentOps session: {url}")
 
-    decision = report["release_recommendation"]["decision"]
     _agentops_end_trace(decision)
 
     raise SystemExit(1 if decision == "BLOCK" else 0)
