@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import logging
+
 import agentops
 import structlog
 
@@ -192,6 +194,10 @@ def _print_summary_table(adversarial: list[dict[str, Any]]) -> None:
         for a in adversarial
     ]
     widths = [max(len(h), *(len(str(r[i])) for r in rows)) for i, h in enumerate(headers)]
+    print()
+    print("=" * 80)
+    print("  ADVERSARIAL INVARIANT RESULTS")
+    print("=" * 80)
     line = " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
     sep = "-+-".join("-" * widths[i] for i in range(len(headers)))
     print(line)
@@ -416,6 +422,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Run a single attack by name. Omit to run all registered attacks and write report.json.",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress verbose API call logs; print only the results table and release gate.",
+    )
     return parser
 
 
@@ -427,6 +438,11 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+
+    if args.quiet:
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING),
+        )
 
     if args.demo_guardrails:
         run_guardrails_smoke_test()
