@@ -1,0 +1,78 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-05-11T00:00:00Z",
+  "attacks": {
+    "cancelled_application_capacity_leak": {
+      "rule": "INV-10",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Mock API does not release reserved capacity on cancel. Confirmed breach."
+    },
+    "closed_case_funding": {
+      "rule": "INV-02",
+      "expected_status": "HELD",
+      "human_verdict": "HELD",
+      "human_reasoning": "API correctly rejects funding for closed/settled cases at application stage."
+    },
+    "disburse_without_attorney_ack": {
+      "rule": "INV-03",
+      "expected_status": "HELD",
+      "human_verdict": "HELD",
+      "human_reasoning": "Disbursement blocked without attorney acknowledgment. No breach."
+    },
+    "duplicate_funding": {
+      "rule": "INV-01",
+      "expected_status": "HELD",
+      "human_verdict": "HELD",
+      "human_reasoning": "Duplicate application correctly rejected with 409. No breach."
+    },
+    "exceeds_case_max_exposure": {
+      "rule": "INV-05",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Approve endpoint does not re-check max exposure. Confirmed over-exposure."
+    },
+    "float_payoff": {
+      "rule": "INV-11",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Mock API returns total_cents as float. INV-11 violation confirmed."
+    },
+    "interest_day_count_basis": {
+      "rule": "INV-12",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "API uses 30-day month approximation instead of exact calendar days."
+    },
+    "interest_from_application_date": {
+      "rule": "INV-04",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Interest accrues from application_date not disbursement_date. Overcharge confirmed."
+    },
+    "lien_balance_exceeds_billed": {
+      "rule": "INV-08",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "API accepts lien with balance > original_billed. Overbilling allowed."
+    },
+    "negative_plaintiff_remainder": {
+      "rule": "INV-09",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Settlement produces negative remainder. Platform should block this."
+    },
+    "usury_rate_cap": {
+      "rule": "INV-06",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Contract rate exceeds state usury cap. Regulatory violation."
+    },
+    "waterfall_priority": {
+      "rule": "INV-07",
+      "expected_status": "BREACHED",
+      "human_verdict": "BREACHED",
+      "human_reasoning": "Medicare paid after medical liens despite super-priority. Liability confirmed."
+    }
+  }
+}

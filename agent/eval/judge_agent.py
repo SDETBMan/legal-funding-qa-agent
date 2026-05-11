@@ -57,6 +57,8 @@ class JudgeModule:
 
     def __init__(self) -> None:
         self._dspy_available = False
+        if os.environ.get("FUNDING_MOCK_LLM"):
+            return
         try:
             import dspy
             if dspy.settings.lm is not None:

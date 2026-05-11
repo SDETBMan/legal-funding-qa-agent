@@ -427,6 +427,33 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress verbose API call logs; print only the results table and release gate.",
     )
+    parser.add_argument(
+        "--mock-llm",
+        action="store_true",
+        help="Force heuristic judge path — zero LLM API calls. For CI and offline testing.",
+    )
+    parser.add_argument(
+        "--write-golden-set",
+        action="store_true",
+        help="Run all attacks and write results to config/golden_set.json as the expected baseline.",
+    )
+    parser.add_argument(
+        "--validate-golden-set",
+        action="store_true",
+        help="After running all attacks, compare results against config/golden_set.json. Exit non-zero on regression.",
+    )
+    parser.add_argument(
+        "--sxs",
+        type=str,
+        default=None,
+        metavar="BASELINE",
+        help="Path to a previous report.json. Prints side-by-side diff and exits non-zero on regressions.",
+    )
+    parser.add_argument(
+        "--shadow",
+        action="store_true",
+        help="Compare agent verdicts against human_verdict in config/golden_set.json and print alignment.",
+    )
     return parser
 
 
@@ -438,6 +465,9 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+
+    if args.mock_llm:
+        os.environ["FUNDING_MOCK_LLM"] = "1"
 
     if args.quiet:
         structlog.configure(
@@ -464,9 +494,144 @@ def main(argv: list[str] | None = None) -> None:
     _agentops_start_trace()
 
     if args.attack is None:
-        _run_all_attacks()
+        _run_all_attacks(args)
     else:
         _run_single_attack(args.attack)
+
+
+def _validate_golden_set(adversarial: list[dict[str, Any]]) -> int:
+    """Compare adversarial results against config/golden_set.json. Return count of regressions."""
+    gs_path = _ROOT / "config" / "golden_set.json"
+    if not gs_path.exists():
+        print(f"error: golden set not found at {gs_path}", file=sys.stderr)
+        print("Run --write-golden-set first to create it.", file=sys.stderr)
+        return 1
+
+    golden = json.loads(gs_path.read_text(encoding="utf-8"))
+    expected = golden.get("attacks", {})
+    actual_map = {a["name"]: a for a in adversarial}
+
+    headers = ("attack", "expected", "actual", "result")
+    rows: list[tuple[str, str, str, str]] = []
+    regressions = 0
+
+    for attack_name, spec in sorted(expected.items()):
+        exp_status = spec["expected_status"]
+        actual = actual_map.get(attack_name)
+        if actual is None:
+            rows.append((attack_name, exp_status, "MISSING", "REGRESSION"))
+            regressions += 1
+            continue
+        act_status = actual["status"]
+        if act_status == exp_status:
+            rows.append((attack_name, exp_status, act_status, "PASS"))
+        else:
+            rows.append((attack_name, exp_status, act_status, "REGRESSION"))
+            regressions += 1
+
+    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
+    print()
+    print("=" * 80)
+    print("  GOLDEN SET VALIDATION")
+    print("=" * 80)
+    print(" | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    print("-+-".join("-" * widths[i] for i in range(len(headers))))
+    for r in rows:
+        print(" | ".join(r[i].ljust(widths[i]) for i in range(len(headers))))
+    print()
+    print(f"Regressions: {regressions}/{len(rows)}")
+    return regressions
+
+
+def _write_golden_set(adversarial: list[dict[str, Any]]) -> None:
+    """Write current results to config/golden_set.json as the expected baseline."""
+    config_dir = _ROOT / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    gs_path = config_dir / "golden_set.json"
+
+    attacks: dict[str, Any] = {}
+    for a in adversarial:
+        attacks[a["name"]] = {
+            "rule": a["rule"],
+            "expected_status": a["status"],
+            "human_verdict": a["status"],
+            "human_reasoning": f"Auto-generated from run. Review and update manually.",
+        }
+
+    golden = {
+        "schema_version": 2,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "attacks": attacks,
+    }
+    gs_path.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Wrote golden set: {gs_path} ({len(attacks)} attacks)")
+
+
+def _run_shadow_comparison(adversarial: list[dict[str, Any]]) -> None:
+    """Compare agent verdicts against human_verdict in golden_set.json."""
+    gs_path = _ROOT / "config" / "golden_set.json"
+    if not gs_path.exists():
+        print(f"error: golden set not found at {gs_path}", file=sys.stderr)
+        print("Run --write-golden-set first to create it.", file=sys.stderr)
+        return
+
+    golden = json.loads(gs_path.read_text(encoding="utf-8"))
+    expected = golden.get("attacks", {})
+    actual_map = {a["name"]: a for a in adversarial}
+
+    details: list[dict[str, Any]] = []
+    agreements = 0
+    total = 0
+
+    headers = ("attack", "rule", "agent", "human", "result")
+    rows: list[tuple[str, str, str, str, str]] = []
+
+    for attack_name, spec in sorted(expected.items()):
+        human_verdict = spec.get("human_verdict")
+        if human_verdict is None:
+            continue
+        total += 1
+        actual = actual_map.get(attack_name)
+        agent_verdict = actual["status"] if actual else "MISSING"
+        aligned = agent_verdict == human_verdict
+        if aligned:
+            agreements += 1
+        result = "AGREE" if aligned else "DISAGREE"
+        rows.append((attack_name, spec.get("rule", ""), agent_verdict, human_verdict, result))
+        details.append({
+            "attack": attack_name,
+            "rule": spec.get("rule", ""),
+            "agent_verdict": agent_verdict,
+            "human_verdict": human_verdict,
+            "aligned": aligned,
+        })
+
+    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
+    print()
+    print("=" * 80)
+    print("  SHADOW MODE: AGENT vs HUMAN VERDICT")
+    print("=" * 80)
+    print(" | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    print("-+-".join("-" * widths[i] for i in range(len(headers))))
+    for r in rows:
+        print(" | ".join(r[i].ljust(widths[i]) for i in range(len(headers))))
+    rate = (agreements / total * 100) if total > 0 else 0
+    print()
+    print(f"Agreement: {agreements}/{total} = {rate:.1f}%")
+
+    # Write shadow report
+    _ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    shadow_report = {
+        "run_id": str(uuid.uuid4()),
+        "agreement_rate": round(agreements / total, 4) if total > 0 else 0,
+        "total": total,
+        "agreements": agreements,
+        "disagreements": total - agreements,
+        "details": details,
+    }
+    shadow_path = _ARTIFACTS / "shadow_report.json"
+    shadow_path.write_text(json.dumps(shadow_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Shadow report: {shadow_path}")
 
 
 def _run_single_attack(attack_name: str) -> None:
@@ -510,7 +675,7 @@ def _run_single_attack(attack_name: str) -> None:
     raise SystemExit(1 if release["decision"] == "BLOCK" else 0)
 
 
-def _run_all_attacks() -> None:
+def _run_all_attacks(args: argparse.Namespace | None = None) -> None:
     client = FundingClient()
     adversarial: list[dict[str, Any]] = []
 
@@ -536,6 +701,39 @@ def _run_all_attacks() -> None:
         f"{summary['breached']} breached, {summary['held']} held, "
         f"{summary['indeterminate']} indeterminate."
     )
+
+    # --write-golden-set: persist current results as the expected baseline
+    if args and args.write_golden_set:
+        _write_golden_set(adversarial)
+
+    # --validate-golden-set: compare results against golden set
+    if args and args.validate_golden_set:
+        regressions = _validate_golden_set(adversarial)
+        if regressions > 0:
+            print(f"FAIL: {regressions} golden set regression(s).", file=sys.stderr)
+            _agentops_end_trace(decision)
+            raise SystemExit(1)
+
+    # --sxs BASELINE: side-by-side comparison
+    if args and args.sxs:
+        from agent.sxs import compare_reports
+        baseline_path = Path(args.sxs)
+        current_path = _ARTIFACTS / "report.json"
+        sxs_report = compare_reports(baseline_path, current_path)
+        sxs_path = _ARTIFACTS / "sxs_report.json"
+        sxs_path.write_text(
+            json.dumps(sxs_report.model_dump(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"SxS report: {sxs_path}")
+        if sxs_report.regressions > 0:
+            print(f"FAIL: {sxs_report.regressions} SxS regression(s).", file=sys.stderr)
+            _agentops_end_trace(decision)
+            raise SystemExit(1)
+
+    # --shadow: compare agent verdicts vs human verdicts
+    if args and args.shadow:
+        _run_shadow_comparison(adversarial)
 
     url = _agentops_session_url()
     if url:

@@ -53,7 +53,7 @@ jobs:
           curl -f http://localhost:8000/health
 
       - name: Run QA agent (release gate)
-        run: python -m agent.main
+        run: python -m agent.main --mock-llm --quiet
         continue-on-error: true  # Exit 1 (BLOCK) expected — mock API has intentional bugs
 
       - name: Upload report artifact
